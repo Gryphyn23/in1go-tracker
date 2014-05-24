@@ -53,8 +53,7 @@ namespace Location.Droid.Orm
 		}
 
         public static int DeleteAllTracks()
-        {
-            
+        {            
             return me.db.DeleteAllTracks();
         }
 

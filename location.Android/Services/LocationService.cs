@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Android.App;
@@ -12,6 +14,7 @@ using Android.Locations;
 using Android.Widget;
 using in1go.tracker;
 using Java.Text;
+using Location.Droid.Orm;
 
 namespace Location.Droid.Services
 {
@@ -72,7 +75,7 @@ namespace Location.Droid.Services
 			return binder;
 		}
 
-        public void HandleIntent(Intent intent)
+        public async void HandleIntent(Intent intent)
         {
             
             if (intent != null)
@@ -88,6 +91,8 @@ namespace Location.Droid.Services
                 {
                     Log.Debug(logTag, "Times up!");
 
+                    //add sending of saved tracks
+                    await SendTracks();
                     ResetManagersIfRequired();
                 }
                 return;
@@ -133,9 +138,11 @@ namespace Location.Droid.Services
                     String.Format("Requesting GPS location updates"),
                    ToastLength.Long
                 ).Show();
-                 * */
+                */
+
                 GPSLocMgr.RequestLocationUpdates("gps", minimumseconds, 0, this);
                 Session.setUsingGps(true);
+
             }
             else if (Session.isTowerEnabled())
             {
@@ -153,6 +160,7 @@ namespace Location.Droid.Services
             }
             else
             {
+
                 Log.Debug(logTag, "No provider available");
                 /*
                 Toast.MakeText
@@ -249,80 +257,139 @@ namespace Location.Droid.Services
             if ((wifi.IsAvailable && wifi.IsConnected) || (mobile.IsAvailable && mobile.IsConnected))
             {
 
-                Log.Debug(logTag, String.Format("now sending"));
-                using (HttpClient client = new HttpClient())
+                if (ConnectionAvailable())
                 {
-                    client.Timeout = new TimeSpan(0, 0, 5);
 
-                    DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                    dtDateTime = dtDateTime.AddMilliseconds(track.Time).ToLocalTime();
-
-                    try
-                    {
-                        var postData = new List<KeyValuePair<string, string>>();
-                        postData.Add(new KeyValuePair<string, string>("latitude", track.Latitude.ToString()));
-                        postData.Add(new KeyValuePair<string, string>("longitude", track.Longitude.ToString()));
-                        postData.Add(new KeyValuePair<string, string>("imei", DeviceIMEI.GetDeviceId(this)));
-                        postData.Add(new KeyValuePair<string, string>("gps_time",
-                            dtDateTime.ToString("yyyy-MM-dd HH:mm:ss")));
-                        postData.Add(new KeyValuePair<string, string>("speed", track.Speed.ToString()));
-                        postData.Add(new KeyValuePair<string, string>("head", "0"));
-                        postData.Add(new KeyValuePair<string, string>("valid", "1"));
-                        postData.Add(new KeyValuePair<string, string>("accuracy", track.Accuracy.ToString()));
-                        postData.Add(new KeyValuePair<string, string>("altitude", track.Altitude.ToString()));
-                        postData.Add(new KeyValuePair<string, string>("bearing", track.Bearing.ToString()));
-
-                        HttpContent content = new FormUrlEncodedContent(postData);
-
-                        HttpResponseMessage response =
-                            await client.PostAsync("http://" + SERVER_IP + ":" + SERVER_PORT + "/", content);
-
-                        //response.EnsureSuccessStatusCode();
-
-                        string responseBody = await response.Content.ReadAsStringAsync();
-
-
-
-                        //Toast.MakeText
-                        //(
-                        //    this,
-                        //    String.Format("responseBody is {0}", responseBody),
-                        //    ToastLength.Long
-                        //).Show();
-
-                    }
-                    catch (HttpRequestException hre)
+                    Log.Debug(logTag, String.Format("now sending"));
+                    using (HttpClient client = new HttpClient())
                     {
 
-                        Log.Debug(logTag, String.Format("HttpRequestException is {0}", hre.ToString()));
-                        /*
-                        Toast.MakeText
-                            (
-                                this,
-                                String.Format("HttpRequestException responseBody is {0}", hre.ToString()),
-                                //String.Format("An http error has occured while sending location to server"),
-                                ToastLength.Short
-                            ).Show();
-                         * */
+                        DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
+                        dtDateTime = dtDateTime.AddMilliseconds(track.Time).ToLocalTime();
 
+                        try
+                        {
+                            var postData = new List<KeyValuePair<string, string>>();
+                            postData.Add(new KeyValuePair<string, string>("latitude", track.Latitude.ToString()));
+                            postData.Add(new KeyValuePair<string, string>("longitude", track.Longitude.ToString()));
+                            postData.Add(new KeyValuePair<string, string>("imei", DeviceIMEI.GetDeviceId(this)));
+                            postData.Add(new KeyValuePair<string, string>("gps_time",dtDateTime.ToString("yyyy-MM-dd HH:mm:ss")));
+                            postData.Add(new KeyValuePair<string, string>("speed", track.Speed.ToString()));
+                            postData.Add(new KeyValuePair<string, string>("head", "0"));
+                            postData.Add(new KeyValuePair<string, string>("valid", "1"));
+                            postData.Add(new KeyValuePair<string, string>("accuracy", track.Accuracy.ToString()));
+                            postData.Add(new KeyValuePair<string, string>("altitude", track.Altitude.ToString()));
+                            postData.Add(new KeyValuePair<string, string>("bearing", track.Bearing.ToString()));
+
+                            HttpContent content = new FormUrlEncodedContent(postData);
+
+                            HttpResponseMessage response = await client.PostAsync("http://" + SERVER_IP + ":" + SERVER_PORT + "/", content);
+
+                            //response.EnsureSuccessStatusCode();
+
+                            string responseBody = await response.Content.ReadAsStringAsync();
+
+                        }
+                        catch (HttpRequestException hre)
+                        {
+                            Log.Debug(logTag, String.Format("HttpRequestException is {0}", hre.ToString()));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug(logTag, String.Format("Exception responseBody is {0}", ex.ToString()));
+                        }
                     }
-                    catch (Exception ex)
+                }
+                else
+                {
+                    Log.Debug(logTag, String.Format("cannot ping,save to db"));
+                    SaveTrackToDB(track);
+                }
+            }
+            else
+            {
+                Log.Debug(logTag, String.Format("no connection,save to db"));
+                SaveTrackToDB(track);
+            }
+        }
+
+        public async Task SendTracks()
+        {
+            ConnectivityManager cm = (ConnectivityManager)GetSystemService(Android.Content.Context.ConnectivityService);
+            NetworkInfo wifi = cm.GetNetworkInfo(ConnectivityType.Wifi);
+            NetworkInfo mobile = cm.GetNetworkInfo(ConnectivityType.Mobile);
+
+            if ((wifi.IsAvailable && wifi.IsConnected) || (mobile.IsAvailable && mobile.IsConnected))
+            {
+                if (ConnectionAvailable())
+                {
+
+                    Log.Debug(logTag, String.Format("Sending Tracks"));
+
+                    var tracks = TracksRepository.GetTracks(5);
+
+                    Log.Debug(logTag,String.Format("tracks to be sent: {0}",tracks.Count()));
+
+                    using (HttpClient client = new HttpClient())
                     {
+                        foreach (var track in tracks)
+                        {
+                            Log.Debug(logTag,
+                                String.Format("tracks: {0} {1}", track.GpsTime.ToLongTimeString(), track.Id));
+                            try
+                            {
+                                var postData = new List<KeyValuePair<string, string>>();
+                                postData.Add(new KeyValuePair<string, string>("latitude", track.Latitude));
+                                postData.Add(new KeyValuePair<string, string>("longitude", track.Longitude));
+                                postData.Add(new KeyValuePair<string, string>("imei", track.Imei));
+                                postData.Add(new KeyValuePair<string, string>("gps_time",
+                                    track.GpsTime.ToString("yyyy-MM-dd HH:mm:ss")));
+                                postData.Add(new KeyValuePair<string, string>("speed", track.Speed));
+                                postData.Add(new KeyValuePair<string, string>("head", track.Head));
+                                postData.Add(new KeyValuePair<string, string>("valid", track.Valid));
+                                postData.Add(new KeyValuePair<string, string>("accuracy", track.Accuracy));
+                                postData.Add(new KeyValuePair<string, string>("altitude", track.Altitude));
+                                postData.Add(new KeyValuePair<string, string>("bearing", track.Bearing));
 
-                        Log.Debug(logTag, String.Format("Exception responseBody is {0}", ex.ToString()));
-                        /*
-                        Toast.MakeText
-                            (
-                                this,
-                                String.Format("responseBody is {0}", ex.ToString()),
-                                //String.Format("An error has occured while sending location to server"),
-                                ToastLength.Short
-                            ).Show();
-                         * */
+                                HttpContent content = new FormUrlEncodedContent(postData);
 
+                                HttpResponseMessage response =
+                                    await client.PostAsync("http://" + SERVER_IP + ":" + SERVER_PORT + "/", content);
+
+                                //response.EnsureSuccessStatusCode();
+
+                                string responseBody = await response.Content.ReadAsStringAsync();
+
+                                if (responseBody == "100")
+                                {
+                                    //record_count--;
+                                    TracksRepository.DeleteTrack(track);
+                                }
+                                else if (response.StatusCode == (HttpStatusCode) 501 &&
+                                         responseBody.Contains("ER_DUP_ENTRY"))
+                                {
+                                    Log.Debug(logTag,
+                                        String.Format("response {0} - {1} - {2}", response.StatusCode,
+                                            response.ReasonPhrase, responseBody));
+                                    TracksRepository.DeleteTrack(track);
+                                }
+
+                            }
+                            catch (HttpRequestException hre)
+                            {
+                                Log.Debug(logTag, String.Format("HttpRequestException is {0}", hre.ToString()));
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Debug(logTag, String.Format("Exception responseBody is {0}", ex.ToString()));
+                            }
+
+                        }
                     }
-
-
+                }
+                else
+                {
+                    Log.Debug(logTag, String.Format("cannot connect to server"));
                 }
 
             }
@@ -331,7 +398,34 @@ namespace Location.Droid.Services
                 Log.Debug(logTag, String.Format("no connection"));
             }
 
+        }
 
+        public static bool ConnectionAvailable()
+        {
+            try
+            {
+                HttpWebRequest reqFP = (HttpWebRequest)HttpWebRequest.Create("http://" + SERVER_IP);
+                reqFP.Timeout = 5000;
+                HttpWebResponse rspFP = (HttpWebResponse)reqFP.GetResponse();
+                if (HttpStatusCode.OK == rspFP.StatusCode)
+                {
+                    // HTTP = 200 - Internet connection available, server online
+
+                    rspFP.Close();
+                    return true;
+                }
+                else
+                {
+                    // Other status - Server or connection not available
+                    rspFP.Close();
+                    return false;
+                }
+            }
+            catch (WebException)
+            {
+                // Exception - connection not available
+                return false;
+            }
         }
 
 		public void OnProviderDisabled (string provider)
@@ -392,6 +486,7 @@ namespace Location.Droid.Services
 
         public void ResetManagersIfRequired()
         {
+
             Log.Debug(logTag, "ResetManagersIfRequired");
             CheckTowerAndGpsStatus();
             if (Session.isUsingGps() && !Session.isGpsEnabled())
@@ -412,6 +507,8 @@ namespace Location.Droid.Services
 
         public void RestartGpsManagers()
         {
+            Session.setCurrentLocationInfo(null);
+            Notify();
             Log.Debug(logTag, "GpsService.RestartGpsManagers");
             StopGpsManager();
             StartLocationUpdates();
@@ -428,6 +525,32 @@ namespace Location.Droid.Services
             {
                 GPSLocMgr.RemoveUpdates(this);
             }
+
+        }
+
+        public void SaveTrackToDB(Android.Locations.Location location)
+        {
+            if (location == null)
+            {
+                return;
+            }
+
+            DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
+            dtDateTime = dtDateTime.AddMilliseconds(location.Time).ToLocalTime();
+
+            var track = new Tracks();
+            track.Latitude = location.Latitude.ToString();
+            track.Longitude = location.Longitude.ToString();
+            track.Imei = DeviceIMEI.GetDeviceId(this);
+            track.GpsTime = dtDateTime;
+            track.Speed = System.Math.Round(1.9438444924406D * (double)location.Speed).ToString();
+            track.Head = "0";
+            track.Valid = "1";
+            track.Accuracy = location.Accuracy.ToString();
+            track.Altitude = location.Altitude.ToString();
+            track.Bearing = location.Bearing.ToString();
+            TracksRepository.SaveTrack(track);
+
 
         }
 
